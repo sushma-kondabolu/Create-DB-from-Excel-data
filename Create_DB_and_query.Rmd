@@ -1,0 +1,398 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Created by: Sri Naga Sai Sushma Kondabolu
+CS5200 Spring 2022
+
+In the following code chunk connected R to the 'birdstrikes' db created locally on MySQL
+```{r}
+
+library(RMySQL)     
+
+
+db_user <- 'root'
+db_password <- '100101'
+db_name <- 'birdstrikes' 
+
+
+db_host <- '127.0.0.1' 
+db_port <- 3306 
+
+
+mydb <-  dbConnect(MySQL(), user = db_user, password = db_password,dbname = db_name, host = db_host, port = db_port)
+```
+
+Connecting to database in MySQL using password
+
+```{r}
+mydb <-  dbConnect(MySQL(), user = db_user, password = db_password,dbname = db_name, host = db_host, port = db_port)
+```
+
+Dropping tables if they are existing already
+```{sql connection=mydb}
+DROP TABLE IF EXISTS general;
+
+```
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS incidents;
+
+```
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS conditions;
+
+```
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS airports;
+
+```
+
+
+Creating 'airports' table
+```{sql connection=mydb}
+CREATE TABLE airports(
+  aid INTEGER PRIMARY KEY AUTO_INCREMENT,
+  airportName VARCHAR(45) UNIQUE,
+  airportCode INT DEFAULT NULL,
+  state VARCHAR(45)
+)
+
+```
+
+
+
+
+Creating 'conditions' table
+```{sql connection=mydb}
+CREATE TABLE conditions(
+  cid INTEGER PRIMARY KEY AUTO_INCREMENT,
+  condition_name VARCHAR(45) UNIQUE,
+  explanation VARCHAR(45) DEFAULT NULL
+)
+
+```
+
+
+
+Creating 'incidents' table
+```{sql connection=mydb}
+CREATE TABLE incidents(
+  iid INT PRIMARY KEY AUTO_INCREMENT,
+  _date DATE,
+  origin INTEGER,
+  airline VARCHAR(45),
+  aircraft VARCHAR(45),
+  flightPhase VARCHAR(45),
+  impact BOOLEAN,
+  cond INTEGER,
+  FOREIGN KEY (origin) REFERENCES airports(aid),
+  FOREIGN KEY (cond) REFERENCES conditions(cid),
+  CHECK (flightphase = "takeoff" OR flightphase = "landing" 
+    OR flightphase = "inflight" OR flightphase = "unknown" )
+);
+
+```
+
+
+
+Importing data in csv file to a dataframe
+```{r}
+
+file_name = "BirdStrikesData.csv"
+df = read.csv(file=file_name,check.names=FALSE) 
+
+df$FlightDate = sub("0:00","",df$FlightDate)
+df$FlightDate = trimws(df$FlightDate)
+df$FlightDate = as.Date(df$FlightDate, format = "%m/%d/%Y")
+
+names(df) <- sub(" ", " ", names(df))
+names(df) <- sub("ï»¿", " ", names(df)) 
+names(df) <- trimws(names(df))
+
+
+df[df == ""] = "unknown" 
+
+df
+```
+
+Checking if the tables present in the database created
+```{r}
+dbListTables(mydb)
+```
+
+
+```{sql connection=mydb}
+SET GLOBAL local_infile = true;
+```
+
+
+Writing the dataframe into a table named 'general'
+```{r}
+
+dbWriteTable(conn=mydb, name="general", value=df)
+```
+
+checking the names of all columns in the table 'general'
+```{sql connection=mydb}
+SHOW COLUMNS FROM general;
+```
+
+Displaying the data in 'general' table
+```{sql connection=mydb}
+SELECT *  FROM general;
+
+```
+
+
+Inserting different airports name and their origin state into 'airports' table
+```{sql connection=mydb}
+INSERT INTO airports(airportName, state)
+SELECT DISTINCT `Airport: Name`, `Origin State` 
+FROM general
+WHERE `Airport: Name` <> "unknown"
+```
+
+
+Adding unknown airport name and state to table
+```{sql connection=mydb}
+INSERT INTO airports(airportName, state)
+VALUES("unknown", "unknown") 
+
+```
+
+
+Displaying the data inserted into airports table
+```{sql connection=mydb}
+SELECT * FROM airports
+
+```
+
+
+
+
+Inserting different sky conditions into 'conditions' table
+
+```{sql connection=mydb}
+INSERT INTO conditions(condition_name)
+SELECT DISTINCT `Conditions: Sky` 
+FROM general
+```
+
+
+
+Inserting data into 'incidents' table, date is displayed in desired format, aid is linked to origin, impact is stored as boolean, flightphase is normalized.
+
+```{sql connection=mydb}
+INSERT INTO incidents ( iid, _date, origin, airline, aircraft, impact, flightphase, cond)
+SELECT t.`Record ID`, STR_TO_DATE(t.`FlightDate`,'%Y-%m-%d'),
+case
+when t.`Aircraft: Airline/Operator` is not null then (select a.aid from airports a where t.`Airport: Name`=a.`airportName` and t.`Origin State`=a.`state`)
+else (select a.aid from airports a where a.`airportName`='unknown')
+end
+, t.`Aircraft: Airline/Operator`, t.`Aircraft: Make/Model`,
+case 
+when t.`Effect: Indicated Damage` like '%Caused damage%' THEN TRUE
+ELSE FALSE
+end
+,
+CASE
+WHEN t.`When: Phase of flight` LIKE '%Take%' THEN 'takeoff'
+WHEN t.`When: Phase of flight` LIKE '%Climb%' THEN 'inflight'
+WHEN t.`When: Phase of flight` LIKE "%descent%" THEN 'inflight'
+WHEN t.`When: Phase of flight` LIKE '%landing%' THEN 'landing'
+WHEN t.`When: Phase of flight` LIKE '%approach%' THEN 'landing'
+ELSE 'unknown'
+END,
+c.cid
+FROM general t, conditions c where t.`Conditions: Sky`=c.`condition_name`
+
+```
+
+
+Displaying data read into incidents
+```{sql connection=mydb}
+SELECT * FROM incidents
+
+```
+```{sql connection=mydb}
+
+delete from incidents where airline='MILITARY';
+
+```
+
+Displaying data loaded from all tables
+```{sql connection=mydb}
+SELECT count(*) FROM incidents
+
+```
+```{sql connection=mydb}
+select * from conditions
+```
+
+
+
+
+```{sql connection=mydb}
+SELECT * FROM airports;
+
+```
+```{sql connection=mydb}
+SELECT *
+FROM incidents
+```
+Describing the flightPhase, aircraft, and airline for each strike, to see how different airlines or aircrafts experienced strike in various flight phases.
+```{sql connection=mydb}
+
+select iid, airline, aircraft, flightPhase from incidents ;
+
+```
+Viewing all condition names in conditions table to check the different type of conditions.
+```{sql connection=mydb}
+
+select condition_name from conditions
+
+```
+Checking names for different states from airports table
+
+```{sql connection=mydb}
+
+select distinct state from airports
+
+```
+
+
+
+
+Count of incidents by each flight phase
+
+```{sql connection=mydb}
+select flightPhase, count(iid) from incidents group by flightPhase;
+```
+
+Flightphase with above average number of bird strikes
+```{sql connection=mydb}
+select flightPhase from incidents having count(iid)>(select avg(count) from (select count(*) as 'count' from incidents group by flightPhase)sub)
+```
+Average bird strikes per month across all years
+
+```{sql connection=mydb}
+select month,avg(count) from (select year(_date),month(_date) as 'month',count(*) as 'count' from incidents group by year(_date),month(_date))sub group by month;
+```
+
+without null data
+```{sql connection=mydb}
+select month,avg(count) from (select year(_date),month(_date) as 'month',count(*) as 'count' from incidents group by year(_date),month(_date))sub where month is not null group by month;
+```
+
+
+
+reference
+```{sql connection=mydb}
+Select flightPhase,Year_considered, AVG(Incidents_count) FROM (SELECT flightPhase,month(_date) as month_considered,year(_date)as Year_considered,COUNT(*) Incidents_count from incidents
+GROUP BY flightPhase,month(_date)) as temp
+GROUP BY flightPhase,Year_considered
+ORDER BY Year_considered,flightPhase
+
+```
+
+
+```{sql connection=mydb}
+
+SELECT 
+  year(_date) as "Year",
+  COUNT(year(_date)) as "Strike Incident Count"
+FROM incidents where year(_date)>2004 and year(_date)<2012
+group by year(_date) order by year(_date)
+
+```
+```{r}
+
+library(sqldf)
+value <-dbGetQuery(mydb,"SELECT 
+  year(_date) ,
+  COUNT(year(_date)) 
+FROM incidents where year(_date)>2004 and year(_date)<2012
+group by year(_date) order by year(_date)")
+
+
+
+names(value)[names(value) == "year(_date)"] <- "Year"
+
+names(value)[names(value) == "COUNT(year(_date))"] <- "Count"
+value
+```
+Plotting of column chart with the help of data frame created above
+```{r}
+library(ggplot2)
+ggplot(data=value, aes(x=Year, y=Count)) +
+    geom_bar(stat="identity")+ggtitle('Count of bird strikes vs Year')
+```
+
+
+Procedure to add birdstrike
+
+```{sql connection=mydb}
+DROP PROCEDURE IF EXISTS add_bird_strike
+
+
+```
+
+
+insert into airports(airportName,state) values (origin_airport,origin_state) where origin_airport not in (select airportName from airports) and origin_airport<>'';
+```{sql connection=mydb}
+
+CREATE PROCEDURE add_bird_strike(origin_airport VARCHAR(50), origin_state VARCHAR(50),flight_phase VARCHAR(50),impact_bool VARCHAR(50),condition_sky VARCHAR(50))
+
+begin
+
+insert into airports(airportName,state)
+select origin_airport,origin_state where origin_airport not in (select airportName from airports) and origin_airport<>'';
+
+
+
+INSERT INTO incidents(origin,impact, flightPhase,cond)
+values (
+case
+when origin_airport in (select airportName from airports) then (select a.aid from airports a where a.airportName=origin_airport)
+else (select a.aid from airports a where a.`airportName`='unknown')
+end,
+case 
+when impact_bool like '%Caused damage%' THEN TRUE
+ELSE FALSE
+end,
+CASE
+WHEN flight_phase LIKE '%Take%' THEN 'takeoff'
+WHEN flight_phase LIKE '%Climb%' THEN 'inflight'
+WHEN flight_phase LIKE "%descent%" THEN 'inflight'
+WHEN flight_phase LIKE '%landing%' THEN 'landing'
+WHEN flight_phase LIKE '%approach%' THEN 'landing'
+ELSE 'unknown'
+END
+,
+(select cid from conditions where condition_name=condition_sky)
+
+
+
+
+);
+
+
+END
+
+```
+```{sql connection=mydb}
+call add_bird_strike('Sushma','Florida','takeoff','Caused damage','No Cloud')
+```
+
+
+Inserted above record
+```{sql connection=mydb}
+
+select * from incidents,airports where incidents.origin=airports.aid and airports.airportName='Sushma'
+```
+
+
+
